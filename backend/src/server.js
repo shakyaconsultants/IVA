@@ -35,13 +35,40 @@ app.use('/api/analytics', require('./routes/analyticsRoutes'));
 app.use('/api/settings', require('./routes/settingsRoutes'));
 app.use('/api/webhooks', require('./routes/webhookRoutes'));
 
-// Health Check
+// Health Check with Component Diagnostics
 app.get('/api/health', (req, res) => {
+  const { getDbStatus } = require('./config/db');
+  const { getIsRedisAvailable } = require('./config/redis');
+
+  const isTwilioConfigured = Boolean(
+    process.env.TWILIO_ACCOUNT_SID &&
+    process.env.TWILIO_AUTH_TOKEN &&
+    process.env.TWILIO_CALLER_ID
+  );
+
+  const isOpenAiRealtimeConfigured = Boolean(
+    process.env.OPENAI_API_KEY &&
+    !process.env.OPENAI_API_KEY.includes('your_openai') &&
+    process.env.OPENAI_API_KEY.trim().length > 0
+  );
+
+  const dbStatus = getDbStatus();
+  const redisAvailable = getIsRedisAvailable();
+
   res.json({
-    status: 'ok',
+    status: dbStatus.connected ? 'ok' : 'degraded',
     timestamp: new Date(),
     service: 'UK IVA Cold Calling & CRM Platform',
-    callingProvider: 'twilio'
+    callingProvider: 'twilio',
+    voiceAiEnabled: process.env.VOICE_AI_ENABLED !== 'false',
+    components: {
+      mongodb: dbStatus.connected ? 'connected' : 'disconnected',
+      redis: redisAvailable ? 'connected' : 'disconnected (using in-memory fallback)',
+      twilio: isTwilioConfigured ? 'configured' : 'not configured',
+      openaiRealtime: isOpenAiRealtimeConfigured ? 'configured' : 'not configured'
+    },
+    realtimeModel: process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-1.5',
+    realtimeAudioFormat: 'g711_ulaw'
   });
 });
 

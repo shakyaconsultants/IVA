@@ -1,7 +1,13 @@
 const { WebSocketServer } = require('ws');
+const voiceGateway = require('../voice/voiceGateway');
 
 function initTwilioMediaStream(httpServer, socketIO) {
   const webSocketServer = new WebSocketServer({ noServer: true });
+
+  // Connect socket.io into voice gateway for real-time CRM updates
+  if (socketIO) {
+    voiceGateway.setSocketIO(socketIO);
+  }
 
   httpServer.on('upgrade', (request, socket, head) => {
     const requestUrl = new URL(request.url, 'http://localhost');
@@ -14,24 +20,8 @@ function initTwilioMediaStream(httpServer, socketIO) {
     });
   });
 
-  webSocketServer.on('connection', (client) => {
-    client.on('message', (message) => {
-      try {
-        const event = JSON.parse(message.toString());
-        if (event.event === 'media' && event.media?.payload) {
-          socketIO.emit('call:audio', {
-            callId: client.callId,
-            payload: event.media.payload
-          });
-        }
-      } catch (error) {
-        console.warn(`[Twilio Media] Invalid stream event: ${error.message}`);
-      }
-    });
-
-    client.on('error', (error) => {
-      console.warn(`[Twilio Media] Stream error: ${error.message}`);
-    });
+  webSocketServer.on('connection', (client, request) => {
+    voiceGateway.handleTwilioConnection(client, request);
   });
 }
 

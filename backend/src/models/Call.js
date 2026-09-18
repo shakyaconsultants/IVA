@@ -15,7 +15,23 @@ const callSchema = new mongoose.Schema({
   },
   aiStatus: {
     type: String,
-    enum: ['idle', 'greeting', 'asking-debt', 'qualifying', 'handling-objection', 'transferring', 'ended'],
+    enum: [
+      'idle',
+      'connecting',
+      'connected',
+      'listening',
+      'thinking',
+      'speaking',
+      'interrupted',
+      'transferring',
+      'ending',
+      'ended',
+      'error',
+      'greeting',
+      'asking-debt',
+      'qualifying',
+      'handling-objection'
+    ],
     default: 'idle'
   },
   amdStatus: {
@@ -35,7 +51,7 @@ const callSchema = new mongoose.Schema({
   recordingUrl: { type: String, default: '' },
   transcript: [
     {
-      speaker: { type: String, enum: ['ai', 'user', 'system'] },
+      speaker: { type: String, enum: ['ai', 'user', 'system', 'customer', 'assistant'] },
       text: { type: String },
       timestamp: { type: Date, default: Date.now }
     }

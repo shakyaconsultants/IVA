@@ -238,7 +238,19 @@ const LiveCalls = () => {
                       <span>AMD: {call.amdStatus || 'Analyzing'}</span>
                     </span>
 
-                    <span className="px-2 py-0.5 rounded bg-slate-950 text-teal-300 border border-slate-800 font-mono">
+                    <span className={`px-2 py-0.5 rounded text-[11px] font-mono border ${
+                      call.aiStatus === 'speaking'
+                        ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30 animate-pulse'
+                        : call.aiStatus === 'listening'
+                        ? 'bg-sky-500/10 text-sky-300 border-sky-500/30'
+                        : call.aiStatus === 'interrupted'
+                        ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                        : call.aiStatus === 'thinking'
+                        ? 'bg-purple-500/10 text-purple-300 border-purple-500/30'
+                        : call.aiStatus === 'error'
+                        ? 'bg-rose-500/10 text-rose-300 border-rose-500/30'
+                        : 'bg-slate-950 text-teal-300 border-slate-800'
+                    }`}>
                       AI: {call.aiStatus || 'Connecting'}
                     </span>
                   </div>
@@ -323,25 +335,28 @@ const LiveCalls = () => {
                     Waiting for lead greeting and AI speech initiation...
                   </div>
                 ) : (
-                  activeCall.transcript.map((item, idx) => (
-                    <div
-                      key={idx}
-                      className={`flex ${item.speaker === 'user' ? 'justify-end' : 'justify-start'}`}
-                    >
+                  activeCall.transcript.map((item, idx) => {
+                    const isCustomer = item.speaker === 'user' || item.speaker === 'customer';
+                    return (
                       <div
-                        className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs ${
-                          item.speaker === 'user'
-                            ? 'bg-teal-600 text-slate-950 font-medium'
-                            : 'bg-slate-800 text-slate-200 border border-slate-700'
-                        }`}
+                        key={idx}
+                        className={`flex ${isCustomer ? 'justify-end' : 'justify-start'}`}
                       >
-                        <span className="text-[10px] opacity-70 block font-bold mb-1">
-                          {item.speaker === 'user' ? 'UK Lead' : 'Sarah (AI Agent)'}
-                        </span>
-                        <span>{item.text}</span>
+                        <div
+                          className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs ${
+                            isCustomer
+                              ? 'bg-teal-600 text-slate-950 font-medium'
+                              : 'bg-slate-800 text-slate-200 border border-slate-700'
+                          }`}
+                        >
+                          <span className="text-[10px] opacity-70 block font-bold mb-1">
+                            {isCustomer ? 'UK Lead' : 'Sarah (AI Agent)'}
+                          </span>
+                          <span>{item.text}</span>
+                        </div>
                       </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>

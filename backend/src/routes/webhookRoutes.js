@@ -69,8 +69,11 @@ router.post('/twilio/status', async (req, res) => {
       if (AnsweredBy && AnsweredBy !== 'human') {
         await twilioService.finalizeCall(call.callId, 'voicemail', `Twilio classified call as ${AnsweredBy}`);
       } else if (AnsweredBy === 'human') {
-        await twilioService.transferCall(call.callId, call.transferDestination, 'Twilio classified human answer');
+        // Human answered: AI voice agent converses with the caller. Transfer only happens when qualified.
+        console.log(`[Twilio Webhook] Human answer verified for callId=${call.callId}. Voice Gateway active.`);
       } else if (CallStatus === 'completed' || CallStatus === 'busy' || CallStatus === 'no-answer' || CallStatus === 'failed') {
+        const { finalizeAndCleanupSession } = require('../voice/voiceGateway');
+        await finalizeAndCleanupSession(call.callId, `Twilio status: ${CallStatus}`);
         await twilioService.finalizeCall(call.callId, CallStatus, `Twilio call ended (${CallDuration || 0}s)`);
       }
     }
@@ -81,12 +84,24 @@ router.post('/twilio/status', async (req, res) => {
   }
 });
 
-// Keeps the call open while Twilio's Answering Machine Detection classifies it.
+// Twilio requests TwiML on call connect. Connects bidirectional audio Media Stream to Voice Gateway.
 router.post('/twilio/voice/:callId', (req, res) => {
+  const callId = req.params.callId;
   const baseUrl = (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
-  const streamUrl = baseUrl.replace(/^https:/i, 'wss:') + `/api/webhooks/twilio/media/${encodeURIComponent(req.params.callId)}`;
+  const streamUrl = baseUrl.replace(/^https:/i, 'wss:') + `/api/webhooks/twilio/media/${encodeURIComponent(callId)}`;
+
+  // Asynchronously prewarm AI session (parallel DB lookups & OpenAI connection while Twilio sets up media stream)
+  try {
+    const { prewarmAiSession } = require('../voice/voiceGateway');
+    prewarmAiSession(callId).catch((err) => {
+      console.warn(`[VOICE] Prewarm notice for callId=${callId}: ${err.message}`);
+    });
+  } catch (err) {
+    console.warn(`[VOICE] Prewarm invocation notice: ${err.message}`);
+  }
+
   res.type('text/xml').send(
-    `<Response><Start><Stream url="${streamUrl}" /></Start><Pause length="30" /></Response>`
+    `<Response><Connect><Stream url="${streamUrl}" /></Connect></Response>`
   );
 });
 
