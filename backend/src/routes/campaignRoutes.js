@@ -122,7 +122,10 @@ router.post('/:id/start', async (req, res) => {
 
     if (!campaign) return res.status(404).json({ message: 'Campaign not found' });
 
-    const leadCount = await Lead.countDocuments({ campaignId: campaign._id, status: 'new' });
+    const leadCount = await Lead.countDocuments({
+      campaignId: campaign._id,
+      status: { $in: ['new', 'queued'] }
+    });
     if (leadCount === 0) {
       await Campaign.findByIdAndUpdate(campaign._id, { status: 'paused' });
       return res.status(400).json({
@@ -151,6 +154,13 @@ router.post('/:id/pause', async (req, res) => {
     );
 
     if (!campaign) return res.status(404).json({ message: 'Campaign not found' });
+
+    // Revert any un-dialed queued leads back to new
+    await Lead.updateMany(
+      { campaignId: campaign._id, status: 'queued' },
+      { $set: { status: 'new' } }
+    );
+
     res.json({ message: `Campaign ${campaign.name} paused`, campaign });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -169,6 +179,13 @@ router.post('/:id/stop', async (req, res) => {
     );
 
     if (!campaign) return res.status(404).json({ message: 'Campaign not found' });
+
+    // Revert any un-dialed queued leads back to new
+    await Lead.updateMany(
+      { campaignId: campaign._id, status: 'queued' },
+      { $set: { status: 'new' } }
+    );
+
     res.json({ message: `Campaign ${campaign.name} stopped`, campaign });
   } catch (err) {
     res.status(500).json({ message: err.message });

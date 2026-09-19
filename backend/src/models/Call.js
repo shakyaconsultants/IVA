@@ -5,6 +5,8 @@ const callSchema = new mongoose.Schema({
   providerCallId: { type: String, default: '' },
   leadId: { type: mongoose.Schema.Types.ObjectId, ref: 'Lead', index: true },
   campaignId: { type: mongoose.Schema.Types.ObjectId, ref: 'Campaign', index: true },
+  agentPromptId: { type: mongoose.Schema.Types.ObjectId, ref: 'AgentPrompt', index: true },
+  agentConfigVersion: { type: Number, default: 1 },
   leadPhone: { type: String, required: true },
   callerId: { type: String, required: true },
   status: {
@@ -44,6 +46,21 @@ const callSchema = new mongoose.Schema({
   answeredAt: { type: Date },
   endedAt: { type: Date },
   disposition: { type: String, default: 'In Progress' },
+  qualificationStatus: {
+    type: String,
+    enum: [
+      'IN_PROGRESS',
+      'INFORMATION_COMPLETE',
+      'POTENTIAL_REFERRAL',
+      'NEEDS_REVIEW',
+      'NOT_SUITABLE',
+      'CUSTOMER_DECLINED',
+      'CALLBACK_REQUIRED',
+      'TRANSFER_READY'
+    ],
+    default: 'IN_PROGRESS'
+  },
+  qualification: { type: mongoose.Schema.Types.Mixed, default: null },
   interested: { type: Boolean, default: false },
   transferred: { type: Boolean, default: false },
   transferDestination: { type: String, default: '' },

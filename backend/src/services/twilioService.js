@@ -72,24 +72,45 @@ async function originateCall({ lead, campaign, callerId }) {
     payload: { phone: lead.phone, callerId: fromNumber, provider: 'twilio' }
   });
 
-  const response = await axios.post(
-    `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/Calls.json`,
-    new URLSearchParams({
-      To: lead.phone,
-      From: fromNumber,
-      Url: twimlUrl(config.baseUrl, callId),
-      StatusCallback: `${config.baseUrl}/api/webhooks/twilio/status`,
-      StatusCallbackMethod: 'POST',
-      StatusCallbackEvent: 'initiated ringing answered completed',
-      MachineDetection: 'Enable',
-      MachineDetectionTimeout: '5'
-    }),
-    { auth: { username: config.accountSid, password: config.authToken } }
-  );
+  try {
+    const response = await axios.post(
+      `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/Calls.json`,
+      new URLSearchParams({
+        To: lead.phone,
+        From: fromNumber,
+        Url: twimlUrl(config.baseUrl, callId),
+        StatusCallback: `${config.baseUrl}/api/webhooks/twilio/status`,
+        StatusCallbackMethod: 'POST',
+        StatusCallbackEvent: 'initiated ringing answered completed',
+        MachineDetection: 'Enable',
+        MachineDetectionTimeout: '5'
+      }),
+      { auth: { username: config.accountSid, password: config.authToken } }
+    );
 
-  await Call.findOneAndUpdate({ callId }, { providerCallId: response.data.sid });
-  if (socketIO) socketIO.emit('call:new', call);
-  return { success: true, callId, providerCallId: response.data.sid };
+    await Call.findOneAndUpdate({ callId }, { providerCallId: response.data.sid });
+    if (socketIO) socketIO.emit('call:new', call);
+    return { success: true, callId, providerCallId: response.data.sid };
+  } catch (err) {
+    const errorMessage = err.response?.data?.message || err.message;
+    await Call.findOneAndUpdate({ callId }, {
+      status: 'failed',
+      aiStatus: 'error',
+      endedAt: new Date(),
+      notes: `Twilio origination error: ${errorMessage}`
+    });
+    await Lead.findByIdAndUpdate(lead._id, {
+      status: 'failed',
+      disposition: 'Call Failed'
+    });
+    await CallEvent.create({
+      callId,
+      eventType: 'DIAL_FAILED',
+      payload: { error: errorMessage, provider: 'twilio' }
+    });
+    if (socketIO) socketIO.emit('call:update', { callId, status: 'failed' });
+    throw err;
+  }
 }
 
 async function transferCall(callId, destinationNumber, reason = 'Qualified IVA prospect') {
@@ -136,9 +157,63 @@ async function finalizeCall(callId, status, reason) {
     cost: calculateCallCost(durationSec, settings),
     notes: call.notes ? `${call.notes} | ${reason}` : reason
   }, { new: true });
-  await Lead.findByIdAndUpdate(call.leadId, { status: status === 'transferred' ? 'transferred' : 'completed', disposition: updatedCall.disposition || 'Completed' });
+
+  // Map terminal PSTN statuses accurately
+  let leadStatus = 'completed';
+  let fallbackDisposition = 'Completed';
+
+  if (status === 'transferred') {
+    leadStatus = 'transferred';
+    fallbackDisposition = 'Transferred to Specialist';
+  } else if (status === 'busy') {
+    leadStatus = 'busy';
+    fallbackDisposition = 'Busy';
+  } else if (status === 'no-answer') {
+    leadStatus = 'no-answer';
+    fallbackDisposition = 'No Answer';
+  } else if (status === 'failed') {
+    leadStatus = 'failed';
+    fallbackDisposition = 'Call Failed';
+  } else if (status === 'voicemail') {
+    leadStatus = 'voicemail';
+    fallbackDisposition = 'Voicemail';
+  }
+
+  const existingDisposition = updatedCall.disposition;
+  const leadDisposition = existingDisposition && existingDisposition !== 'In Progress' && existingDisposition !== 'Pending'
+    ? existingDisposition
+    : fallbackDisposition;
+
+  await Lead.findByIdAndUpdate(call.leadId, {
+    status: leadStatus,
+    disposition: leadDisposition
+  });
+
+  if (call.campaignId) {
+    const incObj = {};
+    if (status === 'completed' || status === 'transferred') {
+      incObj.answeredCalls = 1;
+    } else if (status === 'voicemail') {
+      incObj.voicemailCalls = 1;
+    }
+    if (Object.keys(incObj).length > 0) {
+      await Campaign.findByIdAndUpdate(call.campaignId, { $inc: incObj });
+    }
+  }
+
   await CallEvent.create({ callId, eventType: 'CALL_ENDED', payload: { reason, durationSec, provider: 'twilio' } });
-  if (socketIO) socketIO.emit('call:ended', { callId, status, durationSec, disposition: updatedCall.disposition });
+  if (socketIO) socketIO.emit('call:ended', { callId, status, durationSec, disposition: leadDisposition });
+
+  // Continuous replenishment hook
+  if (call.campaignId) {
+    try {
+      const { replenishCampaignQueue } = require('../queues/queueManager');
+      await replenishCampaignQueue(call.campaignId);
+    } catch (replenishErr) {
+      console.warn(`[Campaign Replenish] Error replenishing campaign ${call.campaignId}: ${replenishErr.message}`);
+    }
+  }
+
   return updatedCall;
 }
 

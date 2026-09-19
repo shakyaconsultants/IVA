@@ -1,4 +1,4 @@
-const { handleMarkInterested } = require('./qualificationTools');
+const { handleMarkInterested, handleUpdateQualification } = require('./qualificationTools');
 const { handleTransferCall } = require('./transferCall');
 const { handleSaveNotes } = require('./saveNotes');
 const { handleUpdateDisposition } = require('./updateDisposition');
@@ -27,6 +27,24 @@ const TOOL_DEFINITIONS = [
         }
       },
       required: ['debtAmount']
+    }
+  },
+  {
+    type: 'function',
+    name: 'update_qualification',
+    description: 'Update a specific customer qualification fact (e.g. debt total, creditor count, housing status, employment, or UK residency) extracted during conversation. The AI must never directly set qualification status.',
+    parameters: {
+      type: 'object',
+      properties: {
+        field: {
+          type: 'string',
+          description: 'Canonical field path or alias to update, e.g. "debt.totalAmount", "debt.creditorCount", "residency.ukResident", "residency.region", "income.employmentStatus"'
+        },
+        value: {
+          description: 'The extracted value for this qualification fact (e.g. number, string, boolean, or array)'
+        }
+      },
+      required: ['field', 'value']
     }
   },
   {
@@ -137,6 +155,8 @@ async function executeTool(name, args = {}, session) {
     switch (name) {
       case 'mark_interested':
         return await handleMarkInterested(args, session);
+      case 'update_qualification':
+        return await handleUpdateQualification(args, session);
       case 'transfer_call':
         return await handleTransferCall(args, session);
       case 'save_notes':

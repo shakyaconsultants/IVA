@@ -7,13 +7,41 @@ const leadSchema = new mongoose.Schema({
   campaignId: { type: mongoose.Schema.Types.ObjectId, ref: 'Campaign', index: true },
   status: {
     type: String,
-    enum: ['new', 'queued', 'dialing', 'ringing', 'in-call', 'transferred', 'voicemail', 'completed', 'failed', 'dnc'],
+    enum: [
+      'new',
+      'queued',
+      'dialing',
+      'ringing',
+      'in-call',
+      'transferred',
+      'voicemail',
+      'completed',
+      'failed',
+      'dnc',
+      'busy',
+      'no-answer'
+    ],
     default: 'new',
     index: true
   },
   attempts: { type: Number, default: 0 },
   lastCallAt: { type: Date, default: null },
   disposition: { type: String, default: 'Pending' },
+  qualificationStatus: {
+    type: String,
+    enum: [
+      'IN_PROGRESS',
+      'INFORMATION_COMPLETE',
+      'POTENTIAL_REFERRAL',
+      'NEEDS_REVIEW',
+      'NOT_SUITABLE',
+      'CUSTOMER_DECLINED',
+      'CALLBACK_REQUIRED',
+      'TRANSFER_READY'
+    ],
+    default: 'IN_PROGRESS'
+  },
+  qualification: { type: mongoose.Schema.Types.Mixed, default: null },
   interested: { type: Boolean, default: false },
   transferred: { type: Boolean, default: false },
   debtAmount: { type: Number, default: 0 },

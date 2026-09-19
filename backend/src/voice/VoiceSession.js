@@ -9,6 +9,8 @@ const ALLOWED_TRANSITIONS = {
   ENDED: []
 };
 
+const { createInitialQualificationState } = require('./qualificationConstants');
+
 /**
  * VoiceSession represents an in-memory active call bridging Twilio and AI.
  */
@@ -22,6 +24,8 @@ class VoiceSession {
     this.leadId = null;
     this.campaignId = null;
     this.agentPromptId = null;
+    this.agentConfigSnapshot = null;
+    this.agentConfigVersion = 1;
 
     this.status = 'initiating'; // 'initiating' | 'active' | 'ended'
     this.aiStatus = 'idle';
@@ -46,14 +50,8 @@ class VoiceSession {
     this.timings = { t0: Date.now() };
 
     this.transcript = [];
-    this.qualificationState = {
-      debtAmount: null,
-      creditorCount: null,
-      ukResident: null,
-      interested: false,
-      qualified: false,
-      missingFields: ['debtAmount', 'creditorCount', 'ukResident']
-    };
+    this.qualificationState = createInitialQualificationState();
+    this.qualificationAudit = [];
 
     this.durationInterval = null;
     this._isCleanedUp = false;

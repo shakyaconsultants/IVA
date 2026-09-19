@@ -7,6 +7,7 @@ const AgentPrompt = require('../models/AgentPrompt');
 const Settings = require('../models/Settings');
 const CallEvent = require('../models/CallEvent');
 const { calculateCallCost } = require('../services/billingService');
+const { buildRealtimeInstructions, buildOpeningGreeting } = require('./instructionBuilder');
 
 let globalSocketIO = null;
 
@@ -198,6 +199,15 @@ async function setupAiProvider(session) {
 
   if (agentPrompt) {
     session.agentPromptId = agentPrompt._id;
+    // Snapshot agent configuration onto session for consistent call-time execution
+    session.agentConfigSnapshot = JSON.parse(JSON.stringify(agentPrompt));
+    session.agentConfigVersion = agentPrompt.version || 1;
+
+    // Persist agent prompt and version to Call record for auditability
+    Call.findOneAndUpdate(
+      { callId: session.callId },
+      { agentPromptId: agentPrompt._id, agentConfigVersion: session.agentConfigVersion }
+    ).catch(() => {});
   }
 
   // Check feature flag
@@ -211,29 +221,18 @@ async function setupAiProvider(session) {
     return null;
   }
 
-  // Format initial system instructions
-  const agentName = agentPrompt?.agentName || 'Sarah Collins';
-  const companyName = agentPrompt?.companyName || 'Beacon Debt Advisory';
-  const leadName = lead?.name || 'there';
-
-  const baseInstructions = `You are a friendly professional UK English telephone assistant. Speak naturally and concisely. You are having a live phone conversation. Do not give long monologues. Listen carefully to the caller. If the caller interrupts, stop speaking and listen. Keep responses short and conversational.`;
-
-  let customSystemPrompt = agentPrompt?.systemPrompt || '';
-  customSystemPrompt = customSystemPrompt
-    .replace(/\[LeadName\]/gi, leadName)
-    .replace(/\[AgentName\]/gi, agentName)
-    .replace(/\[CompanyName\]/gi, companyName);
-
-  const fullInstructions = `${baseInstructions}\n\n${customSystemPrompt}`;
+  // Build Layered Realtime Instructions (Platform Rules + Client Instructions + Behaviour + Context)
+  const fullInstructions = buildRealtimeInstructions({
+    agentConfig: session.agentConfigSnapshot || agentPrompt || {},
+    lead: lead || {},
+    call: call || {}
+  });
 
   // Format opening greeting script
-  let openingScript = agentPrompt?.openingScript || `Hi ${leadName}, this is ${agentName} calling from ${companyName} on a recorded line. I'm calling regarding recent UK government debt relief and IVA schemes for individuals managing unsecured personal debts over £5,000. Do you currently have debts such as credit cards, overdrafts, or loans that you're finding difficult to manage?`;
-  openingScript = openingScript
-    .replace(/\[LeadName\]/gi, leadName)
-    .replace(/\[AgentName\]/gi, agentName)
-    .replace(/\[CompanyName\]/gi, companyName);
-
-  session.openingScript = openingScript;
+  session.openingScript = buildOpeningGreeting({
+    agentConfig: session.agentConfigSnapshot || agentPrompt || {},
+    lead: lead || {}
+  });
 
   // Initialize OpenAI Realtime Provider
   const provider = new OpenAiRealtimeProvider({

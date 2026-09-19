@@ -6,6 +6,36 @@ const agentPromptSchema = new mongoose.Schema({
   agentName: { type: String, required: true, default: 'Sarah Collins' },
   voice: { type: String, default: 'alloy' }, // OpenAI realtime voices: alloy, shimmer, echo, fable, onyx, nova
   language: { type: String, default: 'en-GB' },
+  tone: {
+    type: String,
+    enum: ['professional', 'empathetic', 'friendly', 'direct', 'calm'],
+    default: 'professional'
+  },
+
+  // Primary client-controlled instruction layer
+  instructions: {
+    type: String,
+    default: ''
+  },
+
+  // Client greeting
+  greeting: {
+    type: String,
+    default: ''
+  },
+
+  // Behaviour toggles
+  behaviour: {
+    askOneQuestionAtATime: { type: Boolean, default: true },
+    allowInterruptions: { type: Boolean, default: true },
+    offerCallback: { type: Boolean, default: true },
+    transferOnRequest: { type: Boolean, default: true }
+  },
+
+  // Tenant / Client ownership
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
+  companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', index: true },
+  version: { type: Number, default: 1 },
   
   openingScript: {
     type: String,
