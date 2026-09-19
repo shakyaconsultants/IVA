@@ -132,9 +132,9 @@ class OpenAiRealtimeProvider extends VoiceProvider {
             },
             turn_detection: {
               type: 'server_vad',
-              threshold: 0.5,
+              threshold: 0.6,
               prefix_padding_ms: 300,
-              silence_duration_ms: 500
+              silence_duration_ms: 750
             }
           },
           output: {
@@ -187,6 +187,10 @@ class OpenAiRealtimeProvider extends VoiceProvider {
           this.currentResponseId = event.response?.id || null;
           this.activeResponseId = event.response?.id || null;
           this._cancellationInProgress = false;
+          this.timings.lastResponseCreatedAt = Date.now();
+          const t0 = this.timings.t0 || Date.now();
+          const latencyFromThinking = this.timings.lastSpeechStoppedAt ? (Date.now() - this.timings.lastSpeechStoppedAt) : (Date.now() - t0);
+          console.log(`[LIFECYCLE_TIMING] response.created received: id=${this.currentResponseId} at +${Date.now() - t0}ms (latencyFromThinking=${latencyFromThinking}ms)`);
           console.log(`[VOICE RESPONSE] responseId=${this.currentResponseId} started`);
           this.emit('response_created', { responseId: this.currentResponseId });
           this.emit('status', 'thinking');
@@ -217,8 +221,14 @@ class OpenAiRealtimeProvider extends VoiceProvider {
           }
 
           if (event.delta) {
+            const t0 = this.timings.t0 || Date.now();
             if (!this.timings.t4) {
               this.timings.t4 = Date.now();
+            }
+            if (!this.timings.firstDeltaPerResponse) {
+              this.timings.firstDeltaPerResponse = true;
+              const latencyFromCreated = this.timings.lastResponseCreatedAt ? (Date.now() - this.timings.lastResponseCreatedAt) : null;
+              console.log(`[LIFECYCLE_TIMING] first audio delta for responseId=${deltaResponseId} received at +${Date.now() - t0}ms (timeFromResponseCreated=${latencyFromCreated !== null ? latencyFromCreated + 'ms' : 'N/A'})`);
             }
             this.isResponding = true;
             this.activeResponse = true;
@@ -249,6 +259,9 @@ class OpenAiRealtimeProvider extends VoiceProvider {
           this.isResponding = false;
           this.activeResponse = false;
           this._cancellationInProgress = false;
+          this.timings.firstDeltaPerResponse = false;
+          const t0 = this.timings.t0 || Date.now();
+          console.log(`[LIFECYCLE_TIMING] response.done for responseId=${doneId} received at +${Date.now() - t0}ms (status=${event.response?.status || 'completed'})`);
 
           if (this._initialGreetingSpeechTimer) {
             clearTimeout(this._initialGreetingSpeechTimer);
@@ -265,18 +278,39 @@ class OpenAiRealtimeProvider extends VoiceProvider {
             break;
           }
 
+          // If this response produced tool calls, the AI turn is not over:
+          // The tool must execute, send its output, and OpenAI will generate the follow-up response.
+          // Maintain AI_THINKING and do NOT emit response_done or transition to WAITING_FOR_PROSPECT.
+          const outputItems = event.response?.output || [];
+          const hasFunctionCall = outputItems.some(item => item.type === 'function_call');
+          if (hasFunctionCall) {
+            console.log(`[VOICE RESPONSE] responseId=${doneId} contains function_call; maintaining state ${this.conversationState} during tool execution`);
+            break;
+          }
+
           console.log(`[VOICE RESPONSE] responseId=${doneId} completed`);
-          this.emit('response_done', { responseId: doneId });
+
+          if (this.isEnding || this.isEnded || this.conversationState === 'ENDING' || this.conversationState === 'ENDED') {
+            this.emit('response_done', { responseId: doneId });
+            break;
+          }
 
           if (this.isInitialGreeting) {
             this.isInitialGreeting = false;
             console.log(`[VOICE] initial greeting completed; transitioning to WAITING_FOR_PROSPECT for callId=${this.callId}`);
           }
 
-          // Bug 1 & 5: AI_SPEAKING -> WAITING_FOR_PROSPECT only when NOT ending or ended
-          if (!this.isEnding && !this.isEnded && this.conversationState !== 'ENDING' && this.conversationState !== 'ENDED') {
+          // State transitions on authoritative response completion
+          if (this.conversationState === 'AI_SPEAKING' || this.conversationState === 'INITIAL_GREETING') {
             this.conversationState = 'WAITING_FOR_PROSPECT';
             this.emit('state_changed', this.conversationState);
+            this.emit('response_done', { responseId: doneId });
+          } else if (this.conversationState === 'AI_THINKING') {
+            // Legitimate silent completion: tool-only turn or turn completed without generating audio
+            console.log(`[VOICE RESPONSE] responseId=${doneId} completed without audio in AI_THINKING; authoritatively transitioning to WAITING_FOR_PROSPECT`);
+            this.conversationState = 'WAITING_FOR_PROSPECT';
+            this.emit('state_changed', this.conversationState, { allowSilentCompletion: true });
+            this.emit('response_done', { responseId: doneId, silent: true });
           }
           break;
         }
@@ -286,6 +320,7 @@ class OpenAiRealtimeProvider extends VoiceProvider {
           this.isResponding = false;
           this.activeResponse = false;
           this._cancellationInProgress = false;
+          this.timings.firstDeltaPerResponse = false;
           if (cancelId) {
             this.cancelledResponseIds.add(cancelId);
           }
@@ -299,32 +334,73 @@ class OpenAiRealtimeProvider extends VoiceProvider {
             console.log(`[VOICE] ignoring speech_started because session is ${this.conversationState}`);
             break;
           }
-          console.log(`[VOICE] speech started (user turn detected) for callId=${this.callId}`);
-          const wasActive = this.activeResponse || this.isResponding;
-          this.conversationState = 'PROSPECT_SPEAKING';
-          this.emit('state_changed', this.conversationState);
-          this.emit('speech_started', { wasResponding: wasActive, isInitialGreeting: this.isInitialGreeting });
 
-          if (this.isInitialGreeting) {
-            // Task 4: Protect initial greeting from false barge-in
-            // Do not immediately cancel on transient speech/noise (e.g. line click / quick hello)
-            // Only interrupt if speech is sustained (genuine interruption)
-            if (!this._initialGreetingSpeechTimer && this.activeResponse && !this._cancellationInProgress) {
-              this._initialGreetingSpeechTimer = setTimeout(() => {
-                this._initialGreetingSpeechTimer = null;
-                if (this.isInitialGreeting && this.activeResponse && !this._cancellationInProgress) {
-                  console.log(`[VOICE] sustained prospect interruption confirmed during initial greeting for callId=${this.callId}`);
-                  this.isInitialGreeting = false;
-                  this.clearAudio();
-                  this.emit('greeting_interrupted');
-                }
-              }, 800);
+          const prevState = this.conversationState;
+          const t0 = this.timings.t0 || Date.now();
+          console.log(`[LIFECYCLE_TIMING] speech_started received at +${Date.now() - t0}ms in state=${prevState} for callId=${this.callId}`);
+
+          const wasResponding = Boolean(this.isResponding || this.activeResponse);
+
+          // 1. Genuine barge-in: prospect speaks while AI is actively speaking
+          if (prevState === 'AI_SPEAKING' || prevState === 'INITIAL_GREETING') {
+            console.log(`[VOICE BARGE-IN] genuine barge-in detected during ${prevState} for callId=${this.callId}`);
+            this.conversationState = 'PROSPECT_SPEAKING';
+            this.emit('state_changed', this.conversationState);
+            this.emit('speech_started', { wasResponding: true, isBargeIn: true, isInitialGreeting: this.isInitialGreeting });
+
+            if (this.isInitialGreeting) {
+              // Protect initial greeting from false barge-in (line click / noise)
+              // Only interrupt if speech is sustained (>800ms)
+              if (!this._initialGreetingSpeechTimer && this.activeResponse && !this._cancellationInProgress) {
+                this._initialGreetingSpeechTimer = setTimeout(() => {
+                  this._initialGreetingSpeechTimer = null;
+                  if (this.isInitialGreeting && this.activeResponse && !this._cancellationInProgress) {
+                    console.log(`[VOICE] sustained prospect interruption confirmed during initial greeting for callId=${this.callId}`);
+                    this.isInitialGreeting = false;
+                    this.clearAudio();
+                    this.emit('greeting_interrupted');
+                  }
+                }, 800);
+              }
+            } else {
+              // Clear Twilio audio buffer and cancel the active OpenAI response immediately
+              if (this.activeResponse && !this._cancellationInProgress) {
+                this.clearAudio();
+              }
             }
-          } else {
-            // Normal conversation turn: prompt barge-in
+            break;
+          }
+
+          // 2. Speech event while AI_THINKING:
+          // The prospect already stopped speaking (speech_stopped moved state to AI_THINKING).
+          // DO NOT blindly transition AI_THINKING -> PROSPECT_SPEAKING (state machine must remain valid).
+          // Maintain AI_THINKING state. If an active response exists, cancel it cleanly.
+          if (prevState === 'AI_THINKING') {
+            console.log(`[VOICE] speech_started received during AI_THINKING for callId=${this.callId}; maintaining AI_THINKING state`);
+            this.emit('speech_started', { wasResponding, isBargeIn: wasResponding, isThinking: true });
+            if (wasResponding && this.activeResponse && !this._cancellationInProgress) {
+              this.clearAudio();
+            }
+            break;
+          }
+
+          // 3. Normal turn: prospect starts speaking from WAITING_FOR_PROSPECT or initial connected state
+          if (prevState === 'WAITING_FOR_PROSPECT' || prevState === 'CALL_CONNECTED') {
+            console.log(`[VOICE] normal turn: prospect started speaking from ${prevState} for callId=${this.callId}`);
+            this.conversationState = 'PROSPECT_SPEAKING';
+            this.emit('state_changed', this.conversationState);
+            this.emit('speech_started', { wasResponding: false, isBargeIn: false });
+
             if (this.activeResponse && !this._cancellationInProgress) {
               this.clearAudio();
             }
+            break;
+          }
+
+          // 4. Prospect already speaking or other states: emit event for listeners/tests
+          this.emit('speech_started', { wasResponding, isBargeIn: false });
+          if (wasResponding && this.activeResponse && !this._cancellationInProgress) {
+            this.clearAudio();
           }
           break;
         }
@@ -333,14 +409,17 @@ class OpenAiRealtimeProvider extends VoiceProvider {
           if (this.isEnding || this.isEnded || this.conversationState === 'ENDING' || this.conversationState === 'ENDED') {
             break;
           }
-          console.log(`[VOICE] speech stopped for callId=${this.callId}`);
+          const t0 = this.timings.t0 || Date.now();
+          this.timings.lastSpeechStoppedAt = Date.now();
+          console.log(`[LIFECYCLE_TIMING] speech_stopped at +${Date.now() - t0}ms in state=${this.conversationState} for callId=${this.callId}`);
+
           if (this.isInitialGreeting && this._initialGreetingSpeechTimer) {
-            // Transient speech or click ended quickly (<800ms) - preserve greeting
             console.log(`[VOICE] transient speech ended (<800ms) during initial greeting; preserving greeting for callId=${this.callId}`);
             clearTimeout(this._initialGreetingSpeechTimer);
             this._initialGreetingSpeechTimer = null;
           }
-          if (!this.isInitialGreeting && !this.activeResponse && this.conversationState === 'PROSPECT_SPEAKING') {
+
+          if (this.conversationState === 'PROSPECT_SPEAKING') {
             this.conversationState = 'AI_THINKING';
             this.emit('state_changed', this.conversationState);
           }
@@ -348,15 +427,20 @@ class OpenAiRealtimeProvider extends VoiceProvider {
           break;
         }
 
-        case 'conversation.item.input_audio_transcription.completed':
-          if (event.transcript && event.transcript.trim()) {
-            console.log(`[VOICE] customer transcript received: "${event.transcript.trim()}"`);
+        case 'conversation.item.input_audio_transcription.completed': {
+          const t0 = this.timings.t0 || Date.now();
+          const rawTranscript = event.transcript ? event.transcript.trim() : '';
+          const latencyFromSpeechStop = this.timings.lastSpeechStoppedAt ? (Date.now() - this.timings.lastSpeechStoppedAt) : null;
+          console.log(`[LIFECYCLE_TIMING] transcription.completed: "${rawTranscript}" at +${Date.now() - t0}ms (transcriptionLatency=${latencyFromSpeechStop !== null ? latencyFromSpeechStop + 'ms' : 'N/A'})`);
+
+          if (rawTranscript) {
             this.emit('transcript', {
               speaker: 'customer',
-              text: event.transcript.trim()
+              text: rawTranscript
             });
           }
           break;
+        }
 
         // GA: response.output_audio_transcript.done | Legacy fallback: response.audio_transcript.done
         case 'response.output_audio_transcript.done':
@@ -370,7 +454,9 @@ class OpenAiRealtimeProvider extends VoiceProvider {
           }
           break;
 
-        case 'response.function_call_arguments.done':
+        case 'response.function_call_arguments.done': {
+          const t0 = this.timings.t0 || Date.now();
+          console.log(`[LIFECYCLE_TIMING] tool_call received: name=${event.name}, call_id=${event.call_id} at +${Date.now() - t0}ms`);
           console.log(`[VOICE] tool call received from AI: ${event.name}`);
           let parsedArgs = {};
           try {
@@ -384,6 +470,7 @@ class OpenAiRealtimeProvider extends VoiceProvider {
             arguments: parsedArgs
           });
           break;
+        }
 
         case 'error': {
           const errMsg = event.error?.message || (typeof event.error === 'string' ? event.error : '');
@@ -455,6 +542,29 @@ class OpenAiRealtimeProvider extends VoiceProvider {
     }
   }
 
+  injectAssistantMessage(text) {
+    if (!text || !text.trim()) return false;
+    const cleanText = text.trim();
+
+    const messageEvent = {
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'assistant',
+        content: [
+          {
+            type: 'output_text',
+            text: cleanText
+          }
+        ]
+      }
+    };
+
+    console.log(`[VOICE] injecting assistant message into OpenAI context for callId=${this.callId}`);
+    this._send(messageEvent);
+    return true;
+  }
+
   sendGreeting(script) {
     if (!this.isConnected || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return;
@@ -488,6 +598,8 @@ class OpenAiRealtimeProvider extends VoiceProvider {
     if (!this.isConnected || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return;
     }
+    const t0 = this.timings.t0 || Date.now();
+    console.log(`[LIFECYCLE_TIMING] tool_result sent for call_id=${toolCallId} at +${Date.now() - t0}ms`);
 
     // 1. Send tool output
     this._send({
@@ -512,6 +624,12 @@ class OpenAiRealtimeProvider extends VoiceProvider {
   }
 
   _send(payload) {
+    if (payload.type === 'response.create') {
+      const t0 = this.timings.t0 || Date.now();
+      const latencyFromSpeechStop = this.timings.lastSpeechStoppedAt ? (Date.now() - this.timings.lastSpeechStoppedAt) : null;
+      console.log(`[LIFECYCLE_TIMING] response.create sent at +${Date.now() - t0}ms (sinceSpeechStop=${latencyFromSpeechStop !== null ? latencyFromSpeechStop + 'ms' : 'N/A'})`);
+    }
+
     if (payload.type === 'response.create' && (this.isEnding || this.isEnded || this.conversationState === 'ENDING' || this.conversationState === 'ENDED')) {
       console.log(`[VOICE RESPONSE] blocked response.create because session is ${this.conversationState}`);
       return;

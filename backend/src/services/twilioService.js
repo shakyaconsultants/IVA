@@ -72,6 +72,16 @@ async function originateCall({ lead, campaign, callerId }) {
     payload: { phone: lead.phone, callerId: fromNumber, provider: 'twilio' }
   });
 
+  // Prewarm OpenAI session in background while call is dialing
+  try {
+    const { prewarmAiSession } = require('../voice/voiceGateway');
+    prewarmAiSession(callId).catch((err) => {
+      console.log(`[VOICE PREWARM] background prewarm notice: ${err.message}`);
+    });
+  } catch (err) {
+    // Ignore prewarm error
+  }
+
   try {
     const response = await axios.post(
       `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/Calls.json`,
@@ -83,7 +93,8 @@ async function originateCall({ lead, campaign, callerId }) {
         StatusCallbackMethod: 'POST',
         StatusCallbackEvent: 'initiated ringing answered completed',
         MachineDetection: 'Enable',
-        MachineDetectionTimeout: '5'
+        MachineDetectionTimeout: '5',
+        AsyncAmd: 'true'
       }),
       { auth: { username: config.accountSid, password: config.authToken } }
     );
@@ -118,19 +129,58 @@ async function transferCall(callId, destinationNumber, reason = 'Qualified IVA p
   const call = await Call.findOne({ callId });
   if (!call?.providerCallId) throw new Error('Twilio call not found');
   const target = destinationNumber || call.transferDestination || config.transferNumber;
-  const response = await axios.post(
-    `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/Calls/${call.providerCallId}.json`,
-    new URLSearchParams({ Twiml: `<Response><Dial>${target}</Dial></Response>` }),
-    { auth: { username: config.accountSid, password: config.authToken } }
-  );
-  await Call.findOneAndUpdate({ callId }, {
-    status: 'transferring', aiStatus: 'transferring', transferDestination: target,
-    transferred: true, disposition: 'Transferred to Specialist'
-  });
-  await Lead.findByIdAndUpdate(call.leadId, { status: 'transferred', transferred: true, interested: true, disposition: 'Transferred to Specialist' });
-  if (call.campaignId) await Campaign.findByIdAndUpdate(call.campaignId, { $inc: { transferredCalls: 1, interestedLeads: 1 } });
-  await CallEvent.create({ callId, eventType: 'TRANSFER_REQUESTED', payload: { target, reason, provider: 'twilio' } });
-  return { success: true, target, providerCallId: response.data.sid };
+  if (!target) throw new Error('No transfer destination phone number provided');
+
+  const actionUrl = config.baseUrl ? `${config.baseUrl}/api/webhooks/twilio/transfer-status/${encodeURIComponent(callId)}` : '';
+  const actionAttr = actionUrl ? ` action="${actionUrl}" method="POST"` : '';
+  const callerIdAttr = config.callerId ? ` callerId="${config.callerId}"` : '';
+
+  const twiml = `<Response><Dial timeout="25"${callerIdAttr}${actionAttr}>${target}</Dial></Response>`;
+
+  try {
+    const response = await axios.post(
+      `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/Calls/${call.providerCallId}.json`,
+      new URLSearchParams({ Twiml: twiml }),
+      { auth: { username: config.accountSid, password: config.authToken } }
+    );
+
+    await Call.findOneAndUpdate({ callId }, {
+      status: 'transferring',
+      aiStatus: 'transferring',
+      transferDestination: target,
+      transferred: true,
+      disposition: 'Transferred to Specialist'
+    });
+
+    if (call.leadId) {
+      await Lead.findByIdAndUpdate(call.leadId, {
+        status: 'transferred',
+        transferred: true,
+        interested: true,
+        disposition: 'Transferred to Specialist'
+      });
+    }
+
+    if (call.campaignId) {
+      await Campaign.findByIdAndUpdate(call.campaignId, {
+        $inc: { transferredCalls: 1, interestedLeads: 1 }
+      });
+    }
+
+    await CallEvent.create({
+      callId,
+      eventType: 'TRANSFER_REQUESTED',
+      payload: { target, reason, provider: 'twilio', providerCallId: response.data?.sid }
+    });
+
+    emitCallUpdate({ callId, status: 'transferring', aiStatus: 'transferring', transferred: true });
+
+    return { success: true, target, providerCallId: response.data?.sid };
+  } catch (err) {
+    const errorMessage = err.response?.data?.message || err.message;
+    console.error(`[TWILIO] Call transfer REST API failed for callId=${callId}: ${errorMessage}`);
+    throw new Error(`Twilio transfer API error: ${errorMessage}`);
+  }
 }
 
 async function hangupCall(callId, reason = 'Normal Clearing') {

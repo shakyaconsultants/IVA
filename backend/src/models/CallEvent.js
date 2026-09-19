@@ -6,6 +6,7 @@ const callEventSchema = new mongoose.Schema({
     type: String,
     enum: [
       'DIAL_INITIATED',
+      'DIAL_FAILED',
       'RINGING',
       'ANSWERED',
       'AMD_HUMAN_DETECTED',
@@ -13,9 +14,12 @@ const callEventSchema = new mongoose.Schema({
       'VOICEMAIL_DROP_PLAYED',
       'AI_AGENT_CONNECTED',
       'AI_TOOL_CALLED',
+      'QUALIFICATION_UPDATED',
       'LEAD_QUALIFIED',
       'TRANSFER_REQUESTED',
       'TRANSFER_COMPLETED',
+      'TRANSFER_FAILED',
+      'TWILIO_STATUS_CALLBACK',
       'CALL_ENDED'
     ],
     required: true

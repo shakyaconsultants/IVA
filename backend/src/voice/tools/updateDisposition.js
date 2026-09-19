@@ -30,6 +30,26 @@ async function handleUpdateDisposition({ disposition, reason = '' }, session) {
   ) || disposition.trim();
 
   const isDnc = matched.toLowerCase().includes('dnc') || matched.toLowerCase().includes('do not call');
+  const isNotInterested = matched.toLowerCase().includes('not interested');
+
+  // Safety guard against false/noisy transcripts triggering DNC/Not Interested
+  if (isDnc || isNotInterested) {
+    const customerUtterances = (session.transcript || [])
+      .filter((t) => t.speaker === 'customer')
+      .map((t) => (t.text || '').toLowerCase().trim());
+
+    const noiseWords = ['bye', 'bye.', 'thank you', 'thank you.', 'thanks', 'you', 'hello', 'hello?'];
+    const hasSubstantiveTurn = customerUtterances.some((u) => !noiseWords.includes(u) && u.length > 3);
+
+    if (!hasSubstantiveTurn && (session.durationSec || 0) < 15) {
+      console.warn(`[VOICE TOOL] update_disposition(${matched}) rejected: no substantive customer turn in transcript for callId=${session.callId}`);
+      return {
+        success: false,
+        blocked: true,
+        message: `Cannot set ${matched} without an explicit customer statement. Please confirm if customer wishes to opt out.`
+      };
+    }
+  }
 
   const callUpdate = { disposition: matched };
   if (isDnc) callUpdate.interested = false;

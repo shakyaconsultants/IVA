@@ -96,7 +96,7 @@ RULES:
 4. If they are qualified:
    - Call the tool: mark_interested(level="high", debtAmount=calculatedDebt)
    - Read the warm transfer explanation politely.
-   - Call the tool: transfer_call(phone="+442080009999", reason="Qualified IVA prospect with £X debt")
+   - Call the tool: transfer_call(reason="Qualified IVA prospect with £X debt")
 5. If they are NOT interested or tell you to stop calling:
    - Apologize politely.
    - Call update_disposition(disposition="DNC", reason="Requested no calls")

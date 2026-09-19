@@ -159,13 +159,36 @@ async function handleTwilioStart(data, session) {
     console.log(`[VOICE PREWARM] Twilio stream attached while OpenAI session still connecting for callId=${session.callId}`);
   }
 
-  // If AI session already connected (via prewarming), trigger greeting immediately
-  if (session.aiProvider?.isConnected && !session.hasGreeted) {
-    session.hasGreeted = true;
-    session.setConversationState('INITIAL_GREETING');
-    console.log(`[VOICE] triggering initial AI greeting for callId=${session.callId}`);
-    session.setAiStatus('speaking');
-    session.aiProvider.sendGreeting(session.openingScript);
+  // Handle greeting handover:
+  if (session.greetingSpokenViaTwiml) {
+    if (!session.hasGreeted) {
+      session.hasGreeted = true;
+      session.setConversationState('WAITING_FOR_PROSPECT');
+      session.setAiStatus('listening');
+
+      // Add greeting to transcript exactly once
+      if (session.openingScript) {
+        session.addTranscriptItem({
+          speaker: 'assistant',
+          text: session.openingScript
+        });
+      }
+
+      // Inject spoken greeting into OpenAI conversation context
+      if (session.aiProvider && typeof session.aiProvider.injectAssistantMessage === 'function') {
+        session.aiProvider.injectAssistantMessage(session.openingScript);
+        console.log(`[VOICE] TwiML greeting injected into OpenAI context for callId=${session.callId}`);
+      }
+    }
+  } else {
+    // Fallback: If AI session already connected (via prewarming), trigger greeting via OpenAI
+    if (session.aiProvider?.isConnected && !session.hasGreeted) {
+      session.hasGreeted = true;
+      session.setConversationState('INITIAL_GREETING');
+      console.log(`[VOICE] triggering initial AI greeting for callId=${session.callId}`);
+      session.setAiStatus('speaking');
+      session.aiProvider.sendGreeting(session.openingScript);
+    }
   }
 }
 
@@ -266,13 +289,31 @@ async function setupAiProvider(session) {
 
     session.startDurationTimer();
 
-    // Trigger exactly one initial greeting as soon as both Twilio stream and AI session are active
+    // Trigger initial greeting if stream is active and not already greeted
     if (session.twilioStreamSid && !session.hasGreeted) {
-      session.hasGreeted = true;
-      session.setConversationState('INITIAL_GREETING');
-      console.log(`[VOICE] triggering initial AI greeting for callId=${session.callId}`);
-      session.setAiStatus('speaking');
-      provider.sendGreeting(session.openingScript);
+      if (session.greetingSpokenViaTwiml) {
+        session.hasGreeted = true;
+        session.setConversationState('WAITING_FOR_PROSPECT');
+        session.setAiStatus('listening');
+
+        if (session.openingScript) {
+          session.addTranscriptItem({
+            speaker: 'assistant',
+            text: session.openingScript
+          });
+        }
+
+        if (typeof provider.injectAssistantMessage === 'function') {
+          provider.injectAssistantMessage(session.openingScript);
+          console.log(`[VOICE] TwiML greeting injected into OpenAI context for callId=${session.callId}`);
+        }
+      } else {
+        session.hasGreeted = true;
+        session.setConversationState('INITIAL_GREETING');
+        console.log(`[VOICE] triggering initial AI greeting for callId=${session.callId}`);
+        session.setAiStatus('speaking');
+        provider.sendGreeting(session.openingScript);
+      }
     }
   });
 
@@ -284,17 +325,17 @@ async function setupAiProvider(session) {
     sendTwilioAudio(session, audioData);
   });
 
-  provider.on('state_changed', (state) => {
+  provider.on('state_changed', (state, options) => {
     if (session.isEnded || session.conversationState === 'ENDED') {
       return;
     }
     if (session.isEnding || session.conversationState === 'ENDING') {
       if (state !== 'ENDED') return;
     }
-    session.setConversationState(state);
+    session.setConversationState(state, options);
   });
 
-  provider.on('response_done', async ({ responseId }) => {
+  provider.on('response_done', async ({ responseId, silent = false }) => {
     if (session.isEnded || session.conversationState === 'ENDED') {
       return;
     }
@@ -304,8 +345,10 @@ async function setupAiProvider(session) {
       session.pendingEndMark = endMarkName;
       console.log(`[VOICE END] waiting for Twilio mark: ${endMarkName}`);
       session.sendTwilioMark(endMarkName);
-    } else {
+    } else if (session.conversationState === 'AI_SPEAKING' || session.conversationState === 'INITIAL_GREETING') {
       session.setConversationState('WAITING_FOR_PROSPECT');
+    } else if (silent && session.conversationState === 'AI_THINKING') {
+      session.setConversationState('WAITING_FOR_PROSPECT', { allowSilentCompletion: true });
     }
   });
 
@@ -320,14 +363,17 @@ async function setupAiProvider(session) {
     if (session.isEnded || session.isEnding || session.conversationState === 'ENDING' || session.conversationState === 'ENDED') {
       return;
     }
-    if (eventData?.isInitialGreeting) {
-      // Task 4: Do not clear Twilio buffer on transient speech/noise during protected initial greeting
-      return;
+    // Genuine interruption: flush Twilio audio buffer immediately if AI is speaking (including initial greeting)
+    if (session.conversationState === 'AI_SPEAKING' || session.conversationState === 'INITIAL_GREETING') {
+      console.log(`[VOICE BARGE-IN] genuine barge-in detected during ${session.conversationState}: clearing Twilio for callId=${session.callId}`);
+      sendTwilioClear(session);
+      session.setConversationState('PROSPECT_SPEAKING');
+    } else if (session.conversationState === 'WAITING_FOR_PROSPECT') {
+      console.log(`[VOICE] prospect speech started from WAITING_FOR_PROSPECT for callId=${session.callId}`);
+      session.setConversationState('PROSPECT_SPEAKING');
+    } else {
+      console.log(`[VOICE] speech_started ignored in voiceGateway because state is ${session.conversationState}`);
     }
-    // Genuine interruption: flush Twilio audio buffer immediately
-    console.log(`[VOICE BARGE-IN] clearing Twilio for callId=${session.callId}`);
-    sendTwilioClear(session);
-    session.setConversationState('PROSPECT_SPEAKING');
   });
 
   provider.on('speech_stopped', () => {

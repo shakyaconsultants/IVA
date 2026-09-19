@@ -41,7 +41,13 @@ function buildPlatformRules() {
 - If the customer is not interested, expresses hostility, or asks to be removed from the list, apologize politely, invoke update_disposition(disposition="Not Interested" or "DNC"), and invoke end_call().
 - To preserve important customer details or context, invoke: save_notes().
 - When the call concludes, speak a brief polite farewell and immediately invoke: end_call().
-- Never fabricate tool execution; always rely on the backend tool response.`;
+- Never fabricate tool execution; always rely on the backend tool response.
+
+4. AUTHENTIC USER TURNS & INTENT VERIFICATION:
+- Never conclude that a customer has declined, hung up, or requested DNC from an isolated word like "Bye", "Hello?", or ambient noise.
+- If the customer's utterance is brief, ambiguous, or sounds like a greeting, politely re-introduce yourself or clarify: e.g. "Hello, this is Sarah calling about debt advisory, can you hear me okay?"
+- NEVER invoke update_disposition(DNC) or end_call() unless the customer has explicitly stated in a full response that they are not interested, want no further calls, or clearly refuse to speak.
+- Always require an explicit completed customer turn before ending a call.`;
 }
 
 /**
@@ -148,7 +154,49 @@ ${callContext}
 }
 
 /**
+ * Escapes XML special characters for safe TwiML rendering.
+ * 
+ * @param {string} text
+ * @returns {string} XML-escaped text
+ */
+function escapeXml(text) {
+  if (!text) return '';
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+/**
+ * Maps OpenAI voice persona to an appropriate British English (en-GB) Twilio Polly voice.
+ * 
+ * @param {string} voice - Configured OpenAI voice name
+ * @returns {string} Twilio Polly voice identifier
+ */
+function mapOpenAiVoiceToPolly(voice = '') {
+  const normalized = (voice || '').toLowerCase().trim();
+  const maleVoices = ['echo', 'onyx', 'fable'];
+  const femaleVoices = ['alloy', 'shimmer', 'nova'];
+
+  if (maleVoices.includes(normalized)) {
+    return 'Polly.Arthur';
+  }
+  if (femaleVoices.includes(normalized)) {
+    return 'Polly.Amy';
+  }
+  // Safe en-GB fallback
+  return 'Polly.Amy';
+}
+
+/**
  * Builds the opening greeting spoken when the call connects.
+ * 
+ * Supports template placeholders:
+ * - {{leadName}}, {{agentName}}, {{companyName}}
+ * - [LeadName], [AgentName], [CompanyName]
+ * - {leadName}, {agentName}, {companyName}
  * 
  * @param {Object} params
  * @param {Object} params.agentConfig
@@ -156,17 +204,24 @@ ${callContext}
  * @returns {string} Formatted opening greeting
  */
 function buildOpeningGreeting({ agentConfig = {}, lead = {} }) {
-  const leadName = lead.name || 'there';
-  const agentName = agentConfig.agentName || 'Sarah Collins';
-  const companyName = agentConfig.companyName || 'Beacon Debt Advisory';
+  const leadName = (lead.name || 'there').trim();
+  const agentName = (agentConfig.agentName || 'Sarah Collins').trim();
+  const companyName = (agentConfig.companyName || 'Beacon Debt Advisory').trim();
 
-  let greeting = agentConfig.greeting || agentConfig.openingScript ||
-    `Hi ${leadName}, this is ${agentName} calling from ${companyName} on a recorded line. I'm calling regarding recent UK debt relief and IVA schemes for individuals managing unsecured personal debts over £5,000. Do you currently have debts such as credit cards, overdrafts, or loans that you're finding difficult to manage?`;
+  let greeting = (agentConfig.greeting && agentConfig.greeting.trim())
+    || (agentConfig.openingScript && agentConfig.openingScript.trim())
+    || `Hi ${leadName}, this is ${agentName} calling from ${companyName} on a recorded line. I'm calling regarding recent UK debt relief and IVA schemes for individuals managing unsecured personal debts over £5,000. Do you currently have debts such as credit cards, overdrafts, or loans that you're finding difficult to manage?`;
 
   return greeting
+    .replace(/\{\{\s*leadName\s*\}\}/gi, leadName)
+    .replace(/\{\{\s*agentName\s*\}\}/gi, agentName)
+    .replace(/\{\{\s*companyName\s*\}\}/gi, companyName)
     .replace(/\[LeadName\]/gi, leadName)
     .replace(/\[AgentName\]/gi, agentName)
-    .replace(/\[CompanyName\]/gi, companyName);
+    .replace(/\[CompanyName\]/gi, companyName)
+    .replace(/\{\s*leadName\s*\}/gi, leadName)
+    .replace(/\{\s*agentName\s*\}/gi, agentName)
+    .replace(/\{\s*companyName\s*\}/gi, companyName);
 }
 
 module.exports = {
@@ -175,5 +230,7 @@ module.exports = {
   buildAgentSettings,
   buildCallContext,
   buildRealtimeInstructions,
-  buildOpeningGreeting
+  buildOpeningGreeting,
+  escapeXml,
+  mapOpenAiVoiceToPolly
 };

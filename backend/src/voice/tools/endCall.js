@@ -39,6 +39,26 @@ async function handleEndCall({ reason = 'Call completed normally' }, session) {
     };
   }
 
+  // Safety guard against false transcript immediate termination (e.g. Whisper hallucinating "Bye" on line noise)
+  const isDeclineReason = /bye|not interested|declined|hung up|refused|declined to speak/i.test(reason);
+  if (isDeclineReason && (session.durationSec || 0) < 15) {
+    const customerUtterances = (session.transcript || [])
+      .filter((t) => t.speaker === 'customer')
+      .map((t) => (t.text || '').toLowerCase().trim());
+
+    const noiseWords = ['bye', 'bye.', 'thank you', 'thank you.', 'thanks', 'you', 'hello', 'hello?'];
+    const hasSubstantiveTurn = customerUtterances.some((u) => !noiseWords.includes(u) && u.length > 3);
+
+    if (!hasSubstantiveTurn && customerUtterances.length === 0) {
+      console.warn(`[VOICE TOOL] end_call rejected: premature termination on unverified customer speech for callId=${session.callId}`);
+      return {
+        success: false,
+        blocked: true,
+        message: 'Premature call termination blocked: customer has not completed a valid turn declining the call. Confirm customer intent verbally first.'
+      };
+    }
+  }
+
   // If no audio is playing or buffered, hang up immediately
   console.log(`[VOICE END] no active audio; hanging up immediately for callId=${session.callId}`);
   await session.executeHangup(reason);

@@ -1,6 +1,6 @@
 const ALLOWED_TRANSITIONS = {
-  CALL_CONNECTED: ['INITIAL_GREETING', 'ENDING', 'ENDED'],
-  INITIAL_GREETING: ['AI_SPEAKING', 'PROSPECT_SPEAKING', 'ENDING', 'ENDED'],
+  CALL_CONNECTED: ['INITIAL_GREETING', 'WAITING_FOR_PROSPECT', 'ENDING', 'ENDED'],
+  INITIAL_GREETING: ['AI_SPEAKING', 'WAITING_FOR_PROSPECT', 'PROSPECT_SPEAKING', 'ENDING', 'ENDED'],
   AI_SPEAKING: ['WAITING_FOR_PROSPECT', 'PROSPECT_SPEAKING', 'ENDING', 'ENDED'],
   WAITING_FOR_PROSPECT: ['PROSPECT_SPEAKING', 'ENDING', 'ENDED'],
   PROSPECT_SPEAKING: ['AI_THINKING', 'ENDING', 'ENDED'],
@@ -35,6 +35,8 @@ class VoiceSession {
     this.durationSec = 0;
 
     this.hasGreeted = false;
+    this.greetingSpokenViaTwiml = false;
+    this.pollyVoice = 'Polly.Amy';
     this.isResponding = false;
     this.aiProvider = null;
     this.socketIO = null;
@@ -137,11 +139,15 @@ class VoiceSession {
     }
   }
 
-  setConversationState(newState) {
+  setConversationState(newState, { allowSilentCompletion = false } = {}) {
     const oldState = this.conversationState;
     if (oldState === newState) return true;
 
-    const allowed = ALLOWED_TRANSITIONS[oldState] || [];
+    const allowed = [...(ALLOWED_TRANSITIONS[oldState] || [])];
+    if (allowSilentCompletion && oldState === 'AI_THINKING' && newState === 'WAITING_FOR_PROSPECT') {
+      allowed.push('WAITING_FOR_PROSPECT');
+    }
+
     if (!allowed.includes(newState)) {
       console.log(`[VOICE STATE] INVALID transition ${oldState} -> ${newState}, ignored`);
       return false;
