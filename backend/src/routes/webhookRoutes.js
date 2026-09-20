@@ -87,7 +87,7 @@ router.post('/twilio/status', async (req, res) => {
 router.post('/twilio/voice/:callId?', async (req, res) => {
   // Outbound calls include our call ID in the URL; inbound calls provide Twilio's CallSid.
   const callId = req.params.callId || req.body.CallSid || `inbound_${Date.now()}`;
-  const baseUrl = (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
+  const baseUrl = getPublicBaseUrl();
   const streamUrl = baseUrl.replace(/^https:/i, 'wss:') + `/api/webhooks/twilio/media/${encodeURIComponent(callId)}`;
 
   // Asynchronously prewarm AI session (parallel DB lookups & OpenAI connection while Twilio speaks greeting)
@@ -147,6 +147,17 @@ router.post('/twilio/voice/:callId?', async (req, res) => {
     );
   }
 });
+
+function getPublicBaseUrl() {
+  const configuredUrl = (process.env.PUBLIC_BASE_URL || '').trim();
+  if (!configuredUrl) return '';
+
+  try {
+    return new URL(configuredUrl).origin;
+  } catch (err) {
+    return configuredUrl.replace(/\/$/, '');
+  }
+}
 
 /**
  * Twilio Dial action webhook when a transferred call completes, is busy, or fails

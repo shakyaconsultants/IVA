@@ -18,7 +18,12 @@ function emitCallUpdate(update) {
 }
 
 async function getConfiguration() {
-  const baseUrl = process.env.PUBLIC_BASE_URL;
+  let baseUrl = process.env.PUBLIC_BASE_URL;
+  try {
+    baseUrl = baseUrl ? new URL(baseUrl).origin : baseUrl;
+  } catch (err) {
+    // Leave invalid values unchanged so the existing HTTPS validation reports them.
+  }
 
   return {
      accountSid: process.env.TWILIO_ACCOUNT_SID,
