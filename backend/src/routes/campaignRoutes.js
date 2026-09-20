@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Campaign = require('../models/Campaign');
 const Lead = require('../models/Lead');
+const CampaignLead = require('../models/CampaignLead');
 const { triggerCampaignDial } = require('../queues/queueManager');
 
 /**
@@ -78,6 +79,32 @@ router.put('/:id', async (req, res) => {
     const campaign = await Campaign.findByIdAndUpdate(req.params.id, req.body, { new: true });
     if (!campaign) return res.status(404).json({ message: 'Campaign not found' });
     res.json(campaign);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+/**
+ * DELETE /api/campaigns/:id - Delete a campaign and its leads
+ */
+router.delete('/:id', async (req, res) => {
+  try {
+    const campaign = await Campaign.findById(req.params.id);
+    if (!campaign) return res.status(404).json({ message: 'Campaign not found' });
+    if (campaign.status === 'running') {
+      return res.status(400).json({ message: 'Pause or stop the campaign before deleting it.' });
+    }
+
+    const leads = await Lead.find({ campaignId: campaign._id }).select('_id');
+    const leadIds = leads.map((lead) => lead._id);
+
+    await CampaignLead.deleteMany({ campaignId: campaign._id });
+    if (leadIds.length > 0) {
+      await Lead.deleteMany({ _id: { $in: leadIds } });
+    }
+    await Campaign.deleteOne({ _id: campaign._id });
+
+    res.json({ message: `Campaign ${campaign.name} deleted`, deletedLeads: leadIds.length });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

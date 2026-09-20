@@ -1,35 +1,40 @@
 /**
- * UK Phone Number Normalizer and Validator
- * Formats numbers into E.164 (+44...) and validates UK telecom ranges.
+ * International Phone Number Normalizer and Validator
+ * Accepts country codes with or without + and returns E.164 format.
  */
 
 function normalizeUkPhone(input) {
   if (!input) return null;
   
-  // Strip spaces, dashes, parentheses
-  let cleaned = String(input).trim().replace(/[\s\-\(\)\.]/g, '');
+  let cleaned = String(input).trim().replace(/^'/, '');
 
-  // If starts with 0044, replace with +44
-  if (cleaned.startsWith('0044')) {
+  // Excel may send large phone values as scientific notation (for example 4.47448E+11).
+  if (/^[+]?\d+(?:\.\d+)?e[+\-]?\d+$/i.test(cleaned)) {
+    const numericValue = Number(cleaned);
+    if (!Number.isSafeInteger(numericValue)) return null;
+    cleaned = String(numericValue);
+  } else {
+    // Strip spaces, dashes, parentheses, and decimal separators from regular phone values.
+    cleaned = cleaned.replace(/[\s,\-\(\)\.]/g, '');
+  }
+
+  // Accept international notation that keeps the national trunk zero: +44 (0) 7...
+  if (cleaned.startsWith('+440')) {
     cleaned = '+44' + cleaned.slice(4);
   }
 
-  // If starts with 44 without +, add +
-  if (cleaned.startsWith('44') && cleaned.length >= 12) {
+  // Accept country codes without the + (for example 447... and 917...).
+  if (!cleaned.startsWith('+') && (cleaned.startsWith('44') || cleaned.startsWith('91'))) {
     cleaned = '+' + cleaned;
   }
 
-  // If starts with UK national trunk prefix 0 (e.g. 07... or 01... or 02...)
-  if (cleaned.startsWith('0')) {
-    cleaned = '+44' + cleaned.slice(1);
-  }
-
-  // Check valid UK format (+44 followed by 9 or 10 digits)
+  // Check valid UK format (+44 followed by 9 or 10 digits).
   // UK Mobiles: +44 7xxx xxx xxx
   // UK Geographic: +44 1xxx xxx xxx or +44 2xxx xxx xxx
   // UK Non-geographic: +44 3xxx xxx xxx
   const ukRegex = /^\+44[123789]\d{8,9}$/;
-  if (!ukRegex.test(cleaned)) {
+  const indiaMobileRegex = /^\+91[6-9]\d{9}$/;
+  if (!ukRegex.test(cleaned) && !indiaMobileRegex.test(cleaned)) {
     return null;
   }
 

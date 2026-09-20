@@ -4,7 +4,10 @@ const multer = require('multer');
 const xlsx = require('xlsx');
 const path = require('path');
 const fs = require('fs');
+const { randomUUID } = require('crypto');
 const Lead = require('../models/Lead');
+const Campaign = require('../models/Campaign');
+const CampaignLead = require('../models/CampaignLead');
 const { normalizeUkPhone } = require('../services/ukPhoneValidator');
 const { processLeadBatch } = require('../queues/queueManager');
 
@@ -78,7 +81,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
  */
 router.post('/import', async (req, res) => {
   try {
-    const { rows, mapping, campaignId } = req.body;
+    const { rows, mapping, campaignId, fileName = 'Uploaded leads' } = req.body;
 
     if (!rows || !Array.isArray(rows) || rows.length === 0) {
       return res.status(400).json({ message: 'No lead rows provided for import' });
@@ -93,9 +96,12 @@ router.post('/import', async (req, res) => {
       postcode: row[mapping.postcode] || ''
     }));
 
-    const result = await processLeadBatch(mappedLeads, campaignId);
+    const batchId = randomUUID();
+    const result = await processLeadBatch(mappedLeads, campaignId, { batchId, fileName });
     res.json({
       message: 'Lead import completed',
+      batchId,
+      fileName,
       ...result
     });
   } catch (err) {
@@ -104,7 +110,81 @@ router.post('/import', async (req, res) => {
 });
 
 /**
- * 3. GET /api/leads - Lead Management list with filters
+ * 3. GET /api/leads/batches - Uploaded lead batches
+ */
+router.get('/batches', async (req, res) => {
+  try {
+    const batches = await Lead.aggregate([
+      { $match: { importBatchId: { $exists: true, $ne: null } } },
+      {
+        $group: {
+          _id: '$importBatchId',
+          fileName: { $first: '$importFileName' },
+          campaignId: { $first: '$campaignId' },
+          totalLeads: { $sum: 1 },
+          createdAt: { $min: '$createdAt' }
+        }
+      },
+      { $sort: { createdAt: -1 } },
+      {
+        $lookup: {
+          from: 'campaigns',
+          localField: 'campaignId',
+          foreignField: '_id',
+          as: 'campaign'
+        }
+      },
+      { $unwind: { path: '$campaign', preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          _id: 0,
+          batchId: '$_id',
+          fileName: 1,
+          totalLeads: 1,
+          createdAt: 1,
+          campaign: { _id: '$campaign._id', name: '$campaign.name' }
+        }
+      }
+    ]);
+
+    res.json(batches);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+/**
+ * 4. DELETE /api/leads/batches/:batchId - Delete an uploaded batch
+ */
+router.delete('/batches/:batchId', async (req, res) => {
+  try {
+    const batchLeads = await Lead.find({ importBatchId: req.params.batchId }).select('_id campaignId');
+    if (batchLeads.length === 0) {
+      return res.status(404).json({ message: 'Lead batch not found' });
+    }
+
+    const leadIds = batchLeads.map((lead) => lead._id);
+    const campaignIds = [...new Set(batchLeads
+      .filter((lead) => lead.campaignId)
+      .map((lead) => String(lead.campaignId)))];
+
+    await CampaignLead.deleteMany({ leadId: { $in: leadIds } });
+    const result = await Lead.deleteMany({ _id: { $in: leadIds } });
+
+    for (const campaignId of campaignIds) {
+      await Campaign.findByIdAndUpdate(campaignId, {
+        $set: { totalLeads: await Lead.countDocuments({ campaignId }) }
+      });
+    }
+
+    res.json({ message: 'Lead batch deleted', deleted: result.deletedCount });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+/**
+ * 5. GET /api/leads - Lead Management list with filters
  */
 router.get('/', async (req, res) => {
   try {

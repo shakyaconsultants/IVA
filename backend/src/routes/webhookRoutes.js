@@ -84,8 +84,9 @@ router.post('/twilio/status', async (req, res) => {
 
 
 // Twilio requests TwiML on call connect. Speaks instant client-configured greeting then connects Media Stream.
-router.post('/twilio/voice/:callId', async (req, res) => {
-  const callId = req.params.callId;
+router.post('/twilio/voice/:callId?', async (req, res) => {
+  // Outbound calls include our call ID in the URL; inbound calls provide Twilio's CallSid.
+  const callId = req.params.callId || req.body.CallSid || `inbound_${Date.now()}`;
   const baseUrl = (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
   const streamUrl = baseUrl.replace(/^https:/i, 'wss:') + `/api/webhooks/twilio/media/${encodeURIComponent(callId)}`;
 

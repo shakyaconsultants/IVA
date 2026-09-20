@@ -69,7 +69,7 @@ async function enqueueLeadBatch(leads, campaignId) {
 /**
  * Process lead batch: validate, normalize UK numbers, dedupe, save
  */
-async function processLeadBatch(rawLeads, campaignId) {
+async function processLeadBatch(rawLeads, campaignId, batch = {}) {
   let imported = 0;
   let skipped = 0;
   let invalidPhones = 0;
@@ -83,6 +83,9 @@ async function processLeadBatch(rawLeads, campaignId) {
     if (!normalizedPhone) {
       skipped++;
       invalidPhones++;
+      if (invalidPhones <= 3) {
+        console.warn(`[Lead Import] Invalid phone value received: ${JSON.stringify(raw.phone)}`);
+      }
       continue;
     }
 
@@ -108,6 +111,8 @@ async function processLeadBatch(rawLeads, campaignId) {
         name,
         email,
         campaignId: validCampaignId,
+        importBatchId: batch.batchId,
+        importFileName: batch.fileName || '',
         debtAmount,
         creditorCount,
         postcode,

@@ -262,7 +262,7 @@ async function setupAiProvider(session) {
     callId: session.callId,
     apiKey,
     model: process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-1.5',
-    voice: agentPrompt?.voice || process.env.OPENAI_REALTIME_VOICE || 'alloy',
+    voice: process.env.OPENAI_REALTIME_VOICE || agentPrompt?.voice || 'alloy',
     instructions: fullInstructions,
     tools: TOOL_DEFINITIONS,
     timings: session.timings
