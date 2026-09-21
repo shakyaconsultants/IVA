@@ -32,7 +32,7 @@ const LiveCalls = () => {
       const sign = value & 0x80 ? -1 : 1;
       const exponent = (value >> 4) & 0x07;
       const mantissa = value & 0x0f;
-      samples[index] = sign * ((mantissa * 2 + 33) * 2 ** exponent - 33) / 32768;
+      samples[index] = sign * ((((mantissa << 3) + 0x84) << exponent) - 0x84) / 32768;
     }
 
     const audioContext = audioContextRef.current;
@@ -55,6 +55,7 @@ const LiveCalls = () => {
 
     socket.on('call:new', (newCall) => {
       setLiveCalls((prev) => [newCall, ...prev.filter((c) => c.callId !== newCall.callId)]);
+      setSelectedCallId((current) => current || newCall.callId);
     });
 
     socket.on('call:update', (updated) => {
@@ -81,6 +82,9 @@ const LiveCalls = () => {
     });
 
     socket.on('call:ended', ({ callId }) => {
+      if (callId === selectedCallId) {
+        setListening(false);
+      }
       // Remove from live list after 3 seconds so operators can see disposition
       setTimeout(() => {
         setLiveCalls((prev) => prev.filter((c) => c.callId !== callId));

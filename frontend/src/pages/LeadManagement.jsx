@@ -8,7 +8,9 @@ import {
   FileText,
   Clock,
   PoundSterling,
-  Plus
+  Plus,
+  Trash2,
+  FileSpreadsheet
 } from 'lucide-react';
 import api from '../services/api';
 
@@ -18,9 +20,11 @@ const LeadManagement = () => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [loading, setLoading] = useState(true);
+  const [batches, setBatches] = useState([]);
 
   useEffect(() => {
     fetchLeads();
+    fetchBatches();
   }, [search, statusFilter]);
 
   const fetchLeads = async () => {
@@ -35,6 +39,26 @@ const LeadManagement = () => {
       console.error(err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchBatches = async () => {
+    try {
+      const res = await api.get('/leads/batches');
+      setBatches(res.data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeleteBatch = async (batch) => {
+    if (!window.confirm(`Delete ${batch.totalLeads} leads from "${batch.fileName}"?`)) return;
+
+    try {
+      await api.delete(`/leads/batches/${batch.batchId}`);
+      await Promise.all([fetchLeads(), fetchBatches()]);
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to delete lead batch');
     }
   };
 
@@ -88,6 +112,38 @@ const LeadManagement = () => {
           </select>
         </div>
       </div>
+
+      {batches.length > 0 && (
+        <section className="space-y-3">
+          <div>
+            <h3 className="text-sm font-bold text-white">Uploaded Lead Batches</h3>
+            <p className="text-xs text-slate-400">Review or remove complete uploads from the lead directory.</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {batches.map((batch) => (
+              <div key={batch.batchId} className="flex items-center justify-between gap-3 p-4 bg-slate-900 border border-slate-800 rounded-xl">
+                <div className="flex items-center gap-3 min-w-0">
+                  <FileSpreadsheet className="w-5 h-5 shrink-0 text-teal-400" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-white truncate">{batch.fileName || 'Uploaded leads'}</p>
+                    <p className="text-[11px] text-slate-400">
+                      {batch.totalLeads} leads{batch.campaign?.name ? ` · ${batch.campaign.name}` : ''}
+                      {' · '}{new Date(batch.createdAt).toLocaleDateString('en-GB')}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleDeleteBatch(batch)}
+                  title="Delete uploaded batch"
+                  className="p-2 rounded-lg bg-rose-500/10 text-rose-400 hover:bg-rose-500 hover:text-white transition shrink-0"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Table */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">

@@ -8,7 +8,7 @@ export const SocketProvider = ({ children }) => {
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
-    const newSocket = io('/', {
+    const newSocket = io(import.meta.env.VITE_SOCKET_URL || '/', {
       transports: ['websocket', 'polling']
     });
 

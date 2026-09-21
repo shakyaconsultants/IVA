@@ -11,7 +11,8 @@ import {
   PhoneForwarded,
   Bot,
   Layers,
-  X
+  X,
+  Trash2
 } from 'lucide-react';
 import api from '../services/api';
 
@@ -69,6 +70,17 @@ const Campaigns = ({ setActiveTab }) => {
       fetchData();
     } catch (err) {
       alert(err.response?.data?.message || err.message);
+    }
+  };
+
+  const handleDeleteCampaign = async (campaign) => {
+    if (!window.confirm(`Delete campaign "${campaign.name}" and all of its leads?`)) return;
+
+    try {
+      await api.delete(`/campaigns/${campaign._id}`);
+      fetchData();
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to delete campaign');
     }
   };
 
@@ -171,6 +183,14 @@ const Campaigns = ({ setActiveTab }) => {
                 >
                   <Square className="w-3.5 h-3.5" />
                   <span>Stop</span>
+                </button>
+                <button
+                  onClick={() => handleDeleteCampaign(camp)}
+                  title="Delete campaign and its leads"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-semibold transition"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete</span>
                 </button>
               </div>
             </div>

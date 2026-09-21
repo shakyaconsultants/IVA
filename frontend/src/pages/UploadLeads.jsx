@@ -8,7 +8,8 @@ import {
   Database,
   RefreshCw,
   Layers,
-  Sparkles
+  Sparkles,
+  X
 } from 'lucide-react';
 import api from '../services/api';
 
@@ -29,10 +30,22 @@ const UploadLeads = ({ setActiveTab }) => {
   const [validationStats, setValidationStats] = useState(null);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
+  const [notification, setNotification] = useState(null);
 
   useEffect(() => {
     fetchCampaigns();
   }, []);
+
+  useEffect(() => {
+    if (!notification) return undefined;
+
+    const timeout = setTimeout(() => setNotification(null), 5000);
+    return () => clearTimeout(timeout);
+  }, [notification]);
+
+  const showNotification = (type, title, message) => {
+    setNotification({ type, title, message });
+  };
 
   const fetchCampaigns = async () => {
     try {
@@ -64,14 +77,15 @@ const UploadLeads = ({ setActiveTab }) => {
         ...res.data.suggestedMapping
       }));
       setStep(2);
+      showNotification('success', 'File uploaded', `${res.data.totalRows} lead rows are ready to map.`);
     } catch (err) {
-      alert(err.response?.data?.message || 'File upload failed');
+      showNotification('error', 'Upload failed', err.response?.data?.message || 'The lead file could not be uploaded.');
     }
   };
 
   const handleProceedToValidation = () => {
     if (!mapping.phone) {
-      alert('Please select a column for Phone Number');
+      showNotification('error', 'Phone column required', 'Please select a column for Phone Number.');
       return;
     }
 
@@ -83,7 +97,7 @@ const UploadLeads = ({ setActiveTab }) => {
     rows.forEach((row) => {
       const raw = String(row[mapping.phone] || '').trim();
       const cleaned = raw.replace(/[\s\-\(\)\.]/g, '');
-      if (cleaned.startsWith('07') || cleaned.startsWith('+447') || cleaned.startsWith('447')) {
+      if (cleaned.startsWith('+44') || cleaned.startsWith('44') || cleaned.startsWith('+91') || cleaned.startsWith('91')) {
         validPhones++;
       } else {
         invalidPhones++;
@@ -106,12 +120,28 @@ const UploadLeads = ({ setActiveTab }) => {
       const res = await api.post('/leads/import', {
         rows: uploadData.rows,
         mapping,
-        campaignId: selectedCampaign
+        campaignId: selectedCampaign,
+        fileName: uploadData.fileName
       });
+
+      if (!res.data.imported || res.data.imported < 1) {
+        showNotification(
+          'error',
+          'No leads were imported',
+          `${res.data.skipped || uploadData.totalRows} rows skipped: ${res.data.invalidPhones || 0} invalid phone numbers, ${res.data.duplicates || 0} duplicates, and ${res.data.databaseErrors || 0} database errors.`
+        );
+        return;
+      }
+
       setImportResult(res.data);
       setStep(4);
+      showNotification(
+        'success',
+        'Leads imported successfully',
+        `${res.data.imported} imported, ${res.data.skipped} skipped (${res.data.invalidPhones || 0} invalid, ${res.data.duplicates || 0} duplicates).`
+      );
     } catch (err) {
-      alert(err.response?.data?.message || 'Lead import failed');
+      showNotification('error', 'Import failed', err.response?.data?.message || 'The leads could not be imported.');
     } finally {
       setImporting(false);
     }
@@ -119,6 +149,35 @@ const UploadLeads = ({ setActiveTab }) => {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
+      {notification && (
+        <div
+          role="alert"
+          className={`fixed right-5 top-5 z-50 flex w-[min(380px,calc(100vw-2.5rem))] items-start gap-3 rounded-xl border p-4 shadow-2xl ${
+            notification.type === 'success'
+              ? 'border-emerald-500/40 bg-emerald-950 text-emerald-100 shadow-emerald-950/40'
+              : 'border-rose-500/40 bg-rose-950 text-rose-100 shadow-rose-950/40'
+          }`}
+        >
+          {notification.type === 'success' ? (
+            <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-400" />
+          ) : (
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-rose-400" />
+          )}
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold">{notification.title}</p>
+            <p className="mt-1 text-xs text-current/80">{notification.message}</p>
+          </div>
+          <button
+            type="button"
+            aria-label="Dismiss notification"
+            onClick={() => setNotification(null)}
+            className="rounded-md p-1 text-current/60 transition hover:bg-white/10 hover:text-current"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       {/* Step Indicator */}
       <div className="flex items-center justify-between p-4 bg-slate-900 border border-slate-800 rounded-2xl">
         {[
@@ -279,7 +338,7 @@ const UploadLeads = ({ setActiveTab }) => {
             </div>
             <div className="p-4 rounded-xl bg-amber-950/30 border border-amber-500/30">
               <span className="text-xs text-amber-400">Format Corrections Applied</span>
-              <p className="text-xl font-bold text-amber-300 mt-1">E.164 +44 Prefix</p>
+              <p className="text-xl font-bold text-amber-300 mt-1">Excel +44 Required</p>
             </div>
           </div>
 
@@ -287,7 +346,7 @@ const UploadLeads = ({ setActiveTab }) => {
             <p className="font-semibold text-white">Import Guarantee Checklist:</p>
             <div className="flex items-center gap-2 text-emerald-400">
               <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>Numbers normalized to international E.164 (+44)</span>
+              <span>International country-code numbers accepted (44 / 91)</span>
             </div>
             <div className="flex items-center gap-2 text-emerald-400">
               <CheckCircle2 className="w-3.5 h-3.5" />
