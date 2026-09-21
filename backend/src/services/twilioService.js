@@ -198,7 +198,14 @@ async function hangupCall(callId, reason = 'Normal Clearing') {
       { auth: { username: config.accountSid, password: config.authToken } }
     );
   }
-  return finalizeCall(callId, 'completed', reason);
+  const result = await finalizeCall(callId, 'completed', reason);
+  try {
+    const { finalizeAndCleanupSession } = require('../voice/voiceGateway');
+    await finalizeAndCleanupSession(callId, reason);
+  } catch (err) {
+    console.warn(`[VOICE] Session cleanup after hangup failed for callId=${callId}: ${err.message}`);
+  }
+  return result;
 }
 
 async function finalizeCall(callId, status, reason) {

@@ -63,7 +63,9 @@ router.post('/twilio/status', async (req, res) => {
         emitCallUpdate({ callId: call.callId, ...update });
       }
 
-      if (AnsweredBy && AnsweredBy !== 'human') {
+      const machineAnswer = AnsweredBy && AnsweredBy.toLowerCase() !== 'human';
+      if (machineAnswer) {
+        console.log(`[Twilio Webhook] Machine/voicemail detected (${AnsweredBy}) for callId=${call.callId}; ending call immediately.`);
         await twilioService.finalizeCall(call.callId, 'voicemail', `Twilio classified call as ${AnsweredBy}`);
       } else if (AnsweredBy === 'human') {
         // Human answered: AI voice agent converses with the caller. Transfer only happens when qualified.

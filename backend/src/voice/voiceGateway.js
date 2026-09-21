@@ -433,6 +433,9 @@ function handleTwilioMedia(data, session) {
   }
   const payload = data.media?.payload;
   if (!payload || !session.aiProvider) return;
+  if (globalSocketIO) {
+    globalSocketIO.emit('call:audio', { callId: session.callId, payload });
+  }
   session.aiProvider.sendAudio(payload);
 }
 
@@ -488,6 +491,9 @@ streamSid=${session.twilioStreamSid || 'none'}`);
 
   try {
     session.twilioSocket.send(JSON.stringify(twilioMediaMessage));
+    if (globalSocketIO) {
+      globalSocketIO.emit('call:audio', { callId: session.callId, payload: base64Payload });
+    }
     session.hasBufferedAudio = true;
     session.lastAudioSentAt = Date.now();
 
